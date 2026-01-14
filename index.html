@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stock List (Firestore)</title>
+
+  <style>
+    :root{
+      --bg:#f6f7ff;
+      --card:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --brand:#4f46e5;
+      --danger:#ef4444;
+      --border:#e5e7eb;
+      --radius:16px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      background:#f6f7ff;
+      color:var(--text);
+    }
+    .wrap{max-width:1100px;margin:24px auto;padding:0 14px}
+    h1{margin:0}
+    .sub{color:var(--muted);margin-bottom:14px}
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:14px;
+      margin-bottom:14px;
+    }
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    input,select,button{
+      padding:12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      width:100%;
+      font-size:14px;
+    }
+    button{cursor:pointer;font-weight:700}
+    .btn{background:var(--brand);color:#fff;border:none}
+    .btn-outline{background:#fff}
+    .btn-danger{background:var(--danger);color:#fff;border:none}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:12px;border-bottom:1px solid var(--border);text-align:left}
+    th{background:#f9fafb}
+    .qtybox{display:flex;gap:6px;align-items:center}
+    .qtybtn{padding:6px 10px;font-weight:800}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <h1>Stock List</h1>
+  <div class="sub">Real-time stock synced via Firestore • Chunky Chicken</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="search" placeholder="Search item / supplier / location">
+      <select id="supplierFilter"></select>
+      <select id="stockFilter">
+        <option value="all">All stock</option>
+        <option value="low">Low stock (≤ 3)</option>
+        <option value="out">Out of stock (0)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <button id="adminBtn" class="btn">Enter Admin Mode</button>
+    <button id="exitAdminBtn" class="btn-danger" style="display:none">Exit Admin</button>
+  </div>
+
+  <div class="card" id="adminPanel" style="display:none">
+    <h3>Add new item</h3>
+    <div class="row">
+      <input id="newName" placeholder="Item name">
+      <select id="newSupplier">
+        <option>Caterchoice Order</option>
+        <option>Spice Direct Order</option>
+        <option>Adam Foods</option>
+        <option>Brakes</option>
+        <option>Chunky Meat</option>
+        <option>Cook’d Brands (CKD)</option>
+      </select>
+    </div>
+    <div class="row">
+      <input id="newLocation" placeholder="Location">
+      <input id="newQty" placeholder="Quantity" inputmode="numeric">
+    </div>
+    <button id="addBtn" class="btn">Add Item</button>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Supplier</th>
+          <th>Location</th>
+          <th>Qty</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script type="module">
+  const ADMIN_PASSWORD = "1234";
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+  import {
+    getFirestore, collection, addDoc, doc, deleteDoc,
+    onSnapshot, serverTimestamp, runTransaction
+  } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyC1a-QH7GDbyf47QfsvDia3sHReBN9ALho",
+    authDomain: "internal-stock-d055b.firebaseapp.com",
+    projectId: "internal-stock-d055b"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const colRef = collection(db, "items");
+
+  const $ = id => document.getElementById(id);
+  let isAdmin = false;
+  let items = [];
+
+  $("adminBtn").onclick = () => {
+    const pw = prompt("Admin password:");
+    if(pw === ADMIN_PASSWORD){
+      isAdmin = true;
+      $("adminPanel").style.display = "block";
+      $("exitAdminBtn").style.display = "inline-block";
+    }
+  };
+
+  $("exitAdminBtn").onclick = () => {
+    isAdmin = false;
+    $("adminPanel").style.display = "none";
+    $("exitAdminBtn").style.display = "none";
+  };
+
+  $("addBtn").onclick = async () => {
+    if(!isAdmin) return;
+    await addDoc(colRef,{
+      name:$("newName").value,
+      supplier:$("newSupplier").value,
+      location:$("newLocation").value,
+      qty:Number($("newQty").value||0),
+      updatedAt:serverTimestamp()
+    });
+    $("newName").value="";
+    $("newLocation").value="";
+    $("newQty").value="";
+  };
+
+  function render(){
+    $("tbody").innerHTML="";
+    items.forEach(it=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML=`
+        <td>${it.name}</td>
+        <td>${it.supplier}</td>
+        <td>${it.location}</td>
+        <td>
+          <div class="qtybox">
+            <button class="qtybtn">−</button>
+            ${it.qty}
+            <button class="qtybtn">+</button>
+          </div>
+        </td>
+        <td>${isAdmin?'<button class="btn-danger">Delete</button>':''}</td>
+      `;
+      tr.querySelectorAll(".qtybtn")[0].onclick=()=>updateQty(it.id,-1);
+      tr.querySelectorAll(".qtybtn")[1].onclick=()=>updateQty(it.id,1);
+      if(isAdmin){
+        tr.querySelector(".btn-danger").onclick=()=>deleteDoc(doc(db,"items",it.id));
+      }
+      $("tbody").appendChild(tr);
+    });
+  }
+
+  async function updateQty(id,delta){
+    const ref=doc(db,"items",id);
+    await runTransaction(db,async tx=>{
+      const snap=await tx.get(ref);
+      const qty=Math.max(0,(snap.data().qty||0)+delta);
+      tx.update(ref,{qty,updatedAt:serverTimestamp()});
+    });
+  }
+
+  onSnapshot(colRef,snap=>{
+    items=snap.docs.map(d=>({id:d.id,...d.data()}));
+    render();
+  });
+</script>
+</body>
+</html>
