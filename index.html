@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stock List (Firestore)</title>
+
+  <style>
+    :root{
+      --bg:#f6f7ff;
+      --card:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --brand:#4f46e5;
+      --danger:#ef4444;
+      --border:#e5e7eb;
+      --radius:16px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      background:#f6f7ff;
+      color:var(--text);
+    }
+    .wrap{max-width:1100px;margin:24px auto;padding:0 14px}
+    h1{margin:0}
+    .sub{color:var(--muted);margin-bottom:14px}
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:14px;
+      margin-bottom:14px;
+    }
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .row > *{flex:1}
+    input,select,button{
+      padding:12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      width:100%;
+      font-size:14px;
+      background:#fff;
+    }
+    button{cursor:pointer;font-weight:700}
+    .btn{background:var(--brand);color:#fff;border:none}
+    .btn-outline{background:#fff}
+    .btn-danger{background:var(--danger);color:#fff;border:none}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
+    th{background:#f9fafb}
+    .qtybox{display:flex;gap:6px;align-items:center}
+    .qtybtn{padding:6px 10px;font-weight:800;width:auto}
+    .muted{color:var(--muted)}
+    .actionsWrap{display:flex;gap:8px;flex-wrap:wrap}
+    .btn-small{padding:8px 10px;border-radius:10px;font-size:13px;width:auto}
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <h1>Stock List</h1>
+  <div class="sub">Real-time stock synced via Firestore • Chunky Chicken</div>
+
+  <!-- Filters -->
+  <div class="card">
+    <div class="row">
+      <input id="search" placeholder="Search item / supplier / location">
+      <select id="supplierFilter"></select>
+      <select id="locationFilter"></select>
+      <select id="stockFilter">
+        <option value="all">All stock</option>
+        <option value="low">Low stock (≤ 3)</option>
+        <option value="out">Out of stock (0)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Admin Buttons -->
+  <div class="card">
+    <div class="row">
+      <button id="adminBtn" class="btn">Enter Admin Mode</button>
+      <button id="exitAdminBtn" class="btn-danger" style="display:none">Exit Admin</button>
+    </div>
+    <div class="muted" style="margin-top:8px">
+      Staff can change quantity with + / −. Admin can Add / Edit / Delete items.
+    </div>
+  </div>
+
+  <!-- Admin Panel -->
+  <div class="card" id="adminPanel" style="display:none">
+    <h3 style="margin-top:0">Add new item</h3>
+    <div class="row">
+      <input id="newName" placeholder="Item name">
+      <select id="newSupplier">
+        <option>Caterchoice Order</option>
+        <option>Spice Direct Order</option>
+        <option>Adam Foods</option>
+        <option>Brakes</option>
+        <option>Chunky Meat</option>
+        <option>Cook’d Brands (CKD)</option>
+      </select>
+    </div>
+    <div class="row">
+      <input id="newLocation" placeholder="Location">
+      <input id="newQty" placeholder="Quantity" inputmode="numeric">
+    </div>
+    <button id="addBtn" class="btn">Add Item</button>
+  </div>
+
+  <!-- Table -->
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Supplier</th>
+          <th>Location</th>
+          <th>Qty</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="muted" style="margin-top:10px">
+      Tip: If you can’t see Edit/Delete, make sure Admin Mode is ON.
+    </div>
+  </div>
+
+</div>
+
+<script type="module">
+  // Change this password
+  const ADMIN_PASSWORD = "1234";
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+  import {
+    getFirestore, collection, addDoc, doc, deleteDoc, updateDoc,
+    onSnapshot, serverTimestamp, runTransaction, query, orderBy
+  } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyC1a-QH7GDbyf47QfsvDia3sHReBN9ALho",
+    authDomain: "internal-stock-d055b.firebaseapp.com",
+    projectId: "internal-stock-d055b"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const colRef = collection(db, "items");
+  const qRef = query(colRef, orderBy("updatedAt", "desc"));
+
+  const $ = id => document.getElementById(id);
+
+  // Persist admin mode (so it doesn't reset on refresh)
+  let isAdmin = localStorage.getItem("isAdmin") === "true";
+
+  let items = [];
+
+  function setAdminUI(){
+    $("adminPanel").style.display = isAdmin ? "block" : "none";
+    $("exitAdminBtn").style.display = isAdmin ? "inline-block" : "none";
+    $("adminBtn").textContent = isAdmin ? "Admin Mode Enabled" : "Enter Admin Mode";
+    $("adminBtn").disabled = isAdmin;
+  }
+  setAdminUI();
+
+  $("adminBtn").onclick = () => {
+    const pw = prompt("Admin password:");
+    if(pw === ADMIN_PASSWORD){
+      isAdmin = true;
+      localStorage.setItem("isAdmin","true");
+      setAdminUI();
+      render();
+    } else if (pw !== null) {
+      alert("Wrong password");
+    }
+  };
+
+  $("exitAdminBtn").onclick = () => {
+    isAdmin = false;
+    localStorage.setItem("isAdmin","false");
+    setAdminUI();
+    render();
+  };
+
+  $("addBtn").onclick = async () => {
+    if(!isAdmin) return;
+
+    const name = $("newName").value.trim();
+    const supplier = $("newSupplier").value.trim();
+    const location = $("newLocation").value.trim();
+    const qty = Number($("newQty").value || 0);
+
+    if(!name) return alert("Please enter item name.");
+
+    await addDoc(colRef,{
+      name,
+      supplier,
+      location,
+      qty: isFinite(qty) ? Math.max(0, qty) : 0,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp()
+    });
+
+    $("newName").value="";
+    $("newLocation").value="";
+    $("newQty").value="";
+  };
+
+  // Filters dropdowns build from items
+  function buildFilters(){
+    const supSel = $("supplierFilter");
+    const locSel = $("locationFilter");
+
+    const currentSup = supSel.value || "all";
+    const currentLoc = locSel.value || "all";
+
+    const suppliers = new Set();
+    const locations = new Set();
+
+    items.forEach(it=>{
+      if(it.supplier) suppliers.add(it.supplier);
+      if(it.location) locations.add(it.location);
+    });
+
+    supSel.innerHTML = `<option value="all">All suppliers</option>` +
+      [...suppliers].sort().map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+
+    locSel.innerHTML = `<option value="all">All locations</option>` +
+      [...locations].sort().map(l=>`<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join("");
+
+    if ([...supSel.options].some(o=>o.value===currentSup)) supSel.value=currentSup;
+    if ([...locSel.options].some(o=>o.value===currentLoc)) locSel.value=currentLoc;
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, m => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
+  function passesFilters(it){
+    const s = $("search").value.trim().toLowerCase();
+    const supplier = $("supplierFilter").value;
+    const location = $("locationFilter").value;
+    const stock = $("stockFilter").value;
+
+    const hay = `${it.name||""} ${it.supplier||""} ${it.location||""}`.toLowerCase();
+    if(s && !hay.includes(s)) return false;
+
+    if(supplier !== "all" && (it.supplier||"") !== supplier) return false;
+    if(location !== "all" && (it.location||"") !== location) return false;
+
+    const qty = Number(it.qty || 0);
+    if(stock === "low" && !(qty > 0 && qty <= 3)) return false;
+    if(stock === "out" && qty !== 0) return false;
+
+    return true;
+  }
+
+  $("search").addEventListener("input", render);
+  $("supplierFilter").addEventListener("change", render);
+  $("locationFilter").addEventListener("change", render);
+  $("stockFilter").addEventListener("change", render);
+
+  async function updateQty(id,delta){
+    const ref = doc(db,"items",id);
+    await runTransaction(db, async tx=>{
+      const snap = await tx.get(ref);
+      if(!snap.exists()) return;
+      const current = Number(snap.data().qty || 0);
+      const next = Math.max(0, current + delta);
+      tx.update(ref,{ qty: next, updatedAt: serverTimestamp() });
+    });
+  }
+
+  // ✅ NEW: Admin Edit (name/supplier/location/qty)
+  async function adminEdit(item){
+    if(!isAdmin) return;
+
+    const name = prompt("Edit item name:", item.name || "");
+    if(name === null) return;
+
+    const supplier = prompt("Edit supplier:", item.supplier || "");
+    if(supplier === null) return;
+
+    const location = prompt("Edit location:", item.location || "");
+    if(location === null) return;
+
+    const qtyStr = prompt("Edit quantity (number):", String(item.qty ?? 0));
+    if(qtyStr === null) return;
+
+    const qtyNum = Number(qtyStr);
+    const qty = (Number.isFinite(qtyNum) && qtyNum >= 0) ? qtyNum : 0;
+
+    const ref = doc(db,"items",item.id);
+    await updateDoc(ref,{
+      name: name.trim(),
+      supplier: supplier.trim(),
+      location: location.trim(),
+      qty,
+      updatedAt: serverTimestamp()
+    });
+  }
+
+  function render(){
+    const tbody = $("tbody");
+    tbody.innerHTML = "";
+
+    const visible = items.filter(passesFilters);
+
+    visible.forEach(it=>{
+      const tr=document.createElement("tr");
+
+      tr.innerHTML = `
+        <td>${escapeHtml(it.name || "")}</td>
+        <td>${escapeHtml(it.supplier || "")}</td>
+        <td>${escapeHtml(it.location || "")}</td>
+        <td>
+          <div class="qtybox">
+            <button class="qtybtn" type="button">−</button>
+            <strong>${escapeHtml(it.qty ?? 0)}</strong>
+            <button class="qtybtn" type="button">+</button>
+          </div>
+        </td>
+        <td>
+          <div class="actionsWrap">
+            ${isAdmin ? `<button class="btn-outline btn-small" type="button">Edit</button>` : ``}
+            ${isAdmin ? `<button class="btn-danger btn-small" type="button">Delete</button>` : ``}
+          </div>
+        </td>
+      `;
+
+      tr.querySelectorAll(".qtybtn")[0].onclick=()=>updateQty(it.id,-1);
+      tr.querySelectorAll(".qtybtn")[1].onclick=()=>updateQty(it.id, 1);
+
+      if(isAdmin){
+        const btns = tr.querySelectorAll(".actionsWrap button");
+        // Order is Edit then Delete
+        btns[0].onclick = ()=>adminEdit(it);
+        btns[1].onclick = ()=>deleteDoc(doc(db,"items",it.id));
+      }
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  onSnapshot(qRef, snap=>{
+    items = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    buildFilters();
+    render();
+  });
+</script>
+
+</body>
+</html>
